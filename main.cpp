@@ -39,7 +39,7 @@ char checkMsg = '\0';
 char userMonitorMsg = 'm';
 char userPanicMsg = 'p';
 
-bool delayWithoutSleep (int); 
+bool serialCommunicationLoop (char, char); 
 
 void buttonsRead (void);
 
@@ -108,24 +108,34 @@ void buttonsRead (void){
 void monitorState (void){
     if (last_state == PANIC){
         receiveMsg = false;
+        timer.stop();
         last_state = state;
+    }
+
+    if (serialCommunicationLoop(userMonitorMsg, 'M')){
+        overtime = false;
+        timer.start();
+        start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
     }
 
     if (!receiveMsg){
         serialComm.write(&userMonitorMsg, 1);
         receiveMsg = true;
+        timer.start();
+        start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
     } else if (serialComm.readable()){
         serialComm.read(&checkMsg, 1);
         if (checkMsg == 'M'){
             communicationFailedCount = 0;
+            overtime = false;
+            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
         }else {
             communicationFailedCount ++;
         }
         receiveMsg = false;
     }
 
-    if (communicationFailedCount > MAX_FAILED){
-        timer.start();
+    if ((communicationFailedCount > MAX_FAILED) || overtime){
         ledUser2 = ledUser1;
         if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (start + 1000)){
             ledUser1 = !ledUser1;
@@ -137,6 +147,10 @@ void monitorState (void){
     }else {
         ledUser1 = 1;
         ledUser2 = 0;
+        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (start + 5000)){
+            overtime = true;
+            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+        }
     }
 }
 
@@ -145,6 +159,7 @@ void panicState (void){
         receiveMsg = false;
         confirmationReceived = false;
         communicationFailedCount = 0;
+        timer.stop();
         last_state = state;
     }
     if (!confirmationReceived){
@@ -192,4 +207,5 @@ void offState (void){
     communicationFailedCount = 0;
     confirmationReceived = false;
     receiveMsg = false;
+    timer.stop();
 }
