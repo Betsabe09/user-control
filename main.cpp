@@ -20,6 +20,8 @@ bool buttonPressed3 = false;
 bool receiveMsg = false;
 bool confirmationReceived = false;
 
+bool overtime = false;
+
 int communicationFailedCount = 0;
 
 enum States{
@@ -148,12 +150,16 @@ void panicState (void){
     if (!confirmationReceived){
         if (!receiveMsg){
             serialComm.write(&userPanicMsg, 1);
-            receiveMsg = true;    
+            receiveMsg = true;
+            timer.start();
+            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();    
         } else if (serialComm.readable()){
             serialComm.read(&checkMsg, 1);
             if (checkMsg == 'P'){
                 confirmationReceived = true;
                 communicationFailedCount = 0;
+                overtime = false;
+                timer.stop();
             }else {
                 communicationFailedCount ++;
                 }
@@ -161,8 +167,7 @@ void panicState (void){
         }
     }
 
-    if (communicationFailedCount > MAX_FAILED){
-        timer.start();
+    if ((communicationFailedCount > MAX_FAILED) || overtime){
         ledUser2 = ledUser1;
         if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (start + 1000)){
             ledUser1 = !ledUser1;
@@ -174,6 +179,10 @@ void panicState (void){
     }else {
         ledUser2 = 1;
         ledUser1 = 0;
+        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (start + 5000)){
+            overtime = true;
+            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+        }
     }
 }
 
