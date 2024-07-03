@@ -1,6 +1,9 @@
 #include "mbed.h"
 #include "stdint.h"
+
 #define MAX_FAILED 10
+#define TIMER_FOR_OVERTIME 5000
+#define TIMER_BLINK 1000
 
 DigitalIn buttonUser1(D4);
 DigitalIn buttonUser2(D5);
@@ -22,7 +25,7 @@ bool confirmationReceived = false;
 
 bool overtime = false;
 
-int communicationFailedCount = 0;
+int communicationFailedCount = 0; 
 
 enum States{
     MONITOR,
@@ -33,13 +36,14 @@ enum States{
 States state;
 States last_state;
 
-auto start = 0;
+auto startTime = 0;
+auto startTimeBlink = 0;
 
 char checkMsg = '\0';
 char userMonitorMsg = 'm';
 char userPanicMsg = 'p';
 
-bool serialCommunicationLoop (char, char); 
+//bool serialCommunicationLoop (char, char); 
 
 void buttonsRead (void);
 
@@ -106,59 +110,58 @@ void buttonsRead (void){
 }
 
 void monitorState (void){
+
     if (last_state == PANIC){
         receiveMsg = false;
+        overtime = 0;
+        communicationFailedCount = 0;
         timer.stop();
         last_state = state;
-    }
-
-    if (serialCommunicationLoop(userMonitorMsg, 'M')){
-        overtime = false;
-        timer.start();
-        start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
     }
 
     if (!receiveMsg){
         serialComm.write(&userMonitorMsg, 1);
         receiveMsg = true;
         timer.start();
-        start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+        startTime = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
     } else if (serialComm.readable()){
         serialComm.read(&checkMsg, 1);
         if (checkMsg == 'M'){
             communicationFailedCount = 0;
             overtime = false;
-            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
         }else {
             communicationFailedCount ++;
         }
         receiveMsg = false;
+    }else {
+        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTime + TIMER_FOR_OVERTIME)){
+            overtime = true;
+            receiveMsg = false;
+        }
     }
 
     if ((communicationFailedCount > MAX_FAILED) || overtime){
         ledUser2 = ledUser1;
-        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (start + 1000)){
+        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTimeBlink + TIMER_BLINK)){
             ledUser1 = !ledUser1;
             ledUser2 = !ledUser2;
-            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+            startTimeBlink = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
         }
        // ledUser2 = 1;
        // ledUser1 = 1;
     }else {
         ledUser1 = 1;
         ledUser2 = 0;
-        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (start + 5000)){
-            overtime = true;
-            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
-        }
     }
 }
 
 void panicState (void){
+
     if (last_state == MONITOR){
         receiveMsg = false;
         confirmationReceived = false;
         communicationFailedCount = 0;
+        overtime = 0;
         timer.stop();
         last_state = state;
     }
@@ -167,7 +170,7 @@ void panicState (void){
             serialComm.write(&userPanicMsg, 1);
             receiveMsg = true;
             timer.start();
-            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();    
+            startTime = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();    
         } else if (serialComm.readable()){
             serialComm.read(&checkMsg, 1);
             if (checkMsg == 'P'){
@@ -179,25 +182,26 @@ void panicState (void){
                 communicationFailedCount ++;
                 }
             receiveMsg = false;
+        }else {
+            if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTime + TIMER_FOR_OVERTIME)){
+                overtime = true;
+                receiveMsg = false;
+            }
         }
     }
 
     if ((communicationFailedCount > MAX_FAILED) || overtime){
         ledUser2 = ledUser1;
-        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (start + 1000)){
+        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTimeBlink + TIMER_BLINK)){
             ledUser1 = !ledUser1;
             ledUser2 = !ledUser2;
-            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+            startTimeBlink = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
         }
        // ledUser2 = 1;
        // ledUser1 = 1;
     }else {
         ledUser2 = 1;
         ledUser1 = 0;
-        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (start + 5000)){
-            overtime = true;
-            start = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
-        }
     }
 }
 
@@ -205,6 +209,7 @@ void offState (void){
     ledUser1 = 0;
     ledUser2 = 0;
     communicationFailedCount = 0;
+    overtime = 0;
     confirmationReceived = false;
     receiveMsg = false;
     timer.stop();
