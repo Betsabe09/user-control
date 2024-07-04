@@ -194,12 +194,19 @@ void handlePanicState()
 
 void handleOffState()
 {
+    bool normalOffState1;
+    bool normalOffState2;
+
     if (!confirmationReceived) {
         confirmationReceived = processCommunication('O', 'o');
+        normalOffState1 = true;
+        normalOffState2 = true;
     } else {
         timer.stop();
+        normalOffState1 = false;
+        normalOffState2 = false;
     }
-    updateLeds(led1, led2, false, false);
+    updateLeds(led1, led2, normalOffState1, normalOffState2);
 }
 
 bool processCommunication(char expectedMsg, char sendMsg)
