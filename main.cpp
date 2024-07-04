@@ -5,182 +5,184 @@
 #define TIMER_FOR_OVERTIME 5000
 #define TIMER_BLINK 1000
 
-// Inicialización de pines para botones y LEDs
-DigitalIn buttonUser1(D4);
-DigitalIn buttonUser2(D5);
-DigitalIn buttonUser3(D3);
+// Inicialización de pines para botones y LEDs con PullUp
+DigitalIn button1(D4, PullUp);
+DigitalIn button2(D5, PullUp);
+DigitalIn button3(D3, PullUp);
 
-DigitalOut ledUser1(D14);
-DigitalOut ledUser2(D15);
+DigitalOut led1(D14);
+DigitalOut led2(D15);
 
+// Inicialización del Timer
 Timer timer;
+
+// Inicialización del puerto serie
 static UnbufferedSerial serialComm(D1, D0);
 
 // Variables de estado de los botones
-bool buttonPressed1 = false;
-bool buttonPressed2 = false;
-bool buttonPressed3 = false;
+bool isButton1Pressed = false;
+bool isButton2Pressed = false;
+bool isButton3Pressed = false;
+
+bool isButtonFlagSet = true;
+bool wasButtonFlagSet = false;
 
 // Variables de comunicación y temporización
-bool receiveMsg = false;
+bool isReceiveMsg = false;
 bool confirmationReceived = false;
-bool overtime = false;
-int communicationFailedCount = 0; 
+bool isOvertime = false;
+int commFailCount = 0;
 
 enum States { MONITOR, PANIC, OFF };
-States state;
-States last_state;
+
+States currentState = OFF;
+States lastState = OFF;
 
 // Variables de temporización
 auto startTime = 0;
 auto startTimeBlink = 0;
 
-// Mensajes de comunicación
-char checkMsg = '\0';
-char userMonitorMsg = 'm';
-char userPanicMsg = 'p';
-
 // Prototipos de funciones
-void buttonsRead(void);
-void monitorState(void);
-void panicState(void);
-void offState(void);
-void handleButtonPress(DigitalIn &button, bool &buttonPressed, States newState);
-bool handleCommunication(char expectedMsg, char sendMsg);
-void resetState(void);
-void blinkLeds(void);
-void handleLeds(DigitalOut &led1, DigitalOut &led2, bool normalState);
+void readButtons(void);
+void handleMonitorState(void);
+void handlePanicState(void);
+void handleOffState(void);
+void processButtonPress(DigitalIn &button, bool &isButtonPressed, States newState);
+bool processCommunication(char expectedMsg, char sendMsg);
+void resetStateVariables(void);
+void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2);
+void handleStates(void);
 
 int main() {
-    // Configuración de los botones con PullUp
-    buttonUser1.mode(PullUp);
-    buttonUser2.mode(PullUp);
-    buttonUser3.mode(PullUp);
-
     // Configuración del serial
     serialComm.baud(9600);
     serialComm.format(8, SerialBase::None, 1);
 
-    state = OFF;
-
     while (true) {
-        buttonsRead();
-        if (state != last_state) {
-            resetState();
-            last_state = state;
-        }
-        switch (state) {
-            case MONITOR:
-                monitorState();
-                break;
-            case PANIC:
-                panicState();
-                break;
-            case OFF:
-                offState();
-                break;
-        }
+        readButtons();
+        handleStates();
+    }
+}
+
+void handleStates(void) {
+    if (currentState != lastState) {
+        resetStateVariables();
+        isButtonFlagSet = true;
+        lastState = currentState;
+    }
+
+    switch (currentState) {
+        case MONITOR:
+            handleMonitorState();
+            break;
+        case PANIC:
+            handlePanicState();
+            break;
+        case OFF:
+            if (isButtonFlagSet != wasButtonFlagSet) {
+                resetStateVariables();
+                if (isButtonFlagSet) {
+                    confirmationReceived = true;
+                }
+                wasButtonFlagSet = isButtonFlagSet;
+            }
+            handleOffState();
+            break;
     }
 }
 
 // Lectura de los botones y actualización del estado
-void buttonsRead(void) {
-    handleButtonPress(buttonUser1, buttonPressed1, MONITOR);
-    handleButtonPress(buttonUser2, buttonPressed2, PANIC);
-    handleButtonPress(buttonUser3, buttonPressed3, OFF);
+void readButtons(void) {
+    processButtonPress(button1, isButton1Pressed, MONITOR);
+    processButtonPress(button2, isButton2Pressed, PANIC);
+    processButtonPress(button3, isButton3Pressed, OFF);
 }
 
 // Manejo de la pulsación de un botón
-void handleButtonPress(DigitalIn &button, bool &buttonPressed, States newState) {
-    if (!button && !buttonPressed) {
-        last_state = state;
-        state = newState;
-        buttonPressed = true;
+void processButtonPress(DigitalIn &button, bool &isButtonPressed, States newState) {
+    if (!button && !isButtonPressed) {
+        currentState = newState;
+        isButtonFlagSet = !isButtonFlagSet;
+        isButtonPressed = true;
     } else if (button) {
-        buttonPressed = false;
+        isButtonPressed = false;
     }
 }
 
 // Estado de monitoreo
-void monitorState(void) {
-
+void handleMonitorState(void) {
     if (!confirmationReceived) {
-        confirmationReceived = handleCommunication('M', userMonitorMsg);
-    }else{
+        confirmationReceived = processCommunication('M', 'm');
+    } else {
         confirmationReceived = false;
     }
-
-     handleLeds(ledUser1, ledUser2, true);
+    updateLeds(led1, led2, true, false);
 }
 
 // Estado de pánico
-void panicState(void) {
-
+void handlePanicState(void) {
     if (!confirmationReceived) {
-        confirmationReceived = handleCommunication('P', userPanicMsg);
-    }else {
+        confirmationReceived = processCommunication('P', 'p');
+    } else {
         timer.stop();
     }
-
-    handleLeds(ledUser2, ledUser1, true);
+    updateLeds(led1, led2, false, true);
 }
 
 // Estado apagado
-void offState(void) {
-    ledUser1 = 0;
-    ledUser2 = 0;
-    timer.stop();
-   // resetState();
+void handleOffState(void) {
+    if (!confirmationReceived) {
+        confirmationReceived = processCommunication('O', 'o');
+    } else {
+        timer.stop();
+    }
+    updateLeds(led1, led2, false, false);
 }
 
 // Manejo de la comunicación serial
-bool handleCommunication(char expectedMsg, char sendMsg) {
-    if (!receiveMsg) {
+bool processCommunication(char expectedMsg, char sendMsg) {
+    char checkMsg = '\0';
+
+    if (!isReceiveMsg) {
         serialComm.write(&sendMsg, 1);
-        receiveMsg = true;
+        isReceiveMsg = true;
         timer.start();
         startTime = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
     } else if (serialComm.readable()) {
         serialComm.read(&checkMsg, 1);
         if (checkMsg == expectedMsg) {
-            communicationFailedCount = 0;
-            overtime = false;
-            receiveMsg = false;
+            commFailCount = 0;
+            isOvertime = false;
             return true;
         } else {
-            communicationFailedCount++;
+            commFailCount++;
         }
-        receiveMsg = false;
+        isReceiveMsg = false;
     } else if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTime + TIMER_FOR_OVERTIME)) {
-        overtime = true;
-        receiveMsg = false;
+        isOvertime = true;
+        isReceiveMsg = false;
     }
     return false;
 }
 
 // Reseteo de variables de estado
-void resetState(void) {
-    communicationFailedCount = 0;
-    overtime = false;
+void resetStateVariables(void) {
+    commFailCount = 0;
+    isOvertime = false;
     confirmationReceived = false;
-    receiveMsg = false;
-   // timer.stop();
+    isReceiveMsg = false;
 }
 
 // Parpadeo de LEDs en caso de error
-void blinkLeds(void) {
-    if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTimeBlink + TIMER_BLINK)) {
-        ledUser1 = !ledUser1;
-        ledUser2 = ledUser1;
-        startTimeBlink = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
-    }
-}
-
-void handleLeds(DigitalOut &led1, DigitalOut &led2, bool normalState) {
-    if ((communicationFailedCount > MAX_FAILED) || overtime) {
-        blinkLeds();
+void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2) {
+    if ((commFailCount > MAX_FAILED) || isOvertime) {
+        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTimeBlink + TIMER_BLINK)) {
+            led1 = !led1;
+            led2 = led1;
+            startTimeBlink = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+        }
     } else {
-        led1 = normalState;
-        led2 = !normalState;
+        led1 = normalState1;
+        led2 = normalState2;
     }
 }
