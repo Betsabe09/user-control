@@ -1,70 +1,133 @@
 #include "mbed.h"
 #include "stdint.h"
 
-#define MAX_FAILED 10
-#define TIMER_FOR_OVERTIME 5000
-#define TIMER_BLINK 1000
+#define MAX_FAILED 10                ///< Máximo número de fallos de comunicación antes de considerar error
+#define TIMER_FOR_OVERTIME 5000      ///< Tiempo en milisegundos para considerar sobretiempo en la comunicación
+#define TIMER_BLINK 1000             ///< Tiempo en milisegundos para el parpadeo de los LEDs en caso de error
 
-// Inicialización de pines para botones y LEDs con PullUp
-DigitalIn button1(D4, PullUp);
-DigitalIn button2(D5, PullUp);
-DigitalIn button3(D3, PullUp);
+//=====[Declaration and initialization of public global objects]===============
+DigitalIn button1(D4, PullUp);       /**< Botón 1 en el pin D4 */
+DigitalIn button2(D5, PullUp);       /**< Botón 2 en el pin D5 */
+DigitalIn button3(D3, PullUp);       /**< Botón 3 en el pin D3 */
 
-DigitalOut led1(D14);
-DigitalOut led2(D15);
+DigitalOut led1(D14);                /**< LED 1 en el pin D14 */
+DigitalOut led2(D15);                /**< LED 2 en el pin D15 */
 
-// Inicialización del Timer
-Timer timer;
+Timer timer;                         /**< Timer para la temporización general */
 
-// Inicialización del puerto serie
-static UnbufferedSerial serialComm(D1, D0);
+static UnbufferedSerial serialComm(D1, D0); /**< Comunicación serie sin búfer en pines D1 (TX) y D0 (RX) */
 
-// Variables de estado de los botones
-bool isButton1Pressed = false;
-bool isButton2Pressed = false;
-bool isButton3Pressed = false;
+//=====[Declaration and initialization of public global variables]=============
+bool isButton1Pressed = false;       /**< Estado de presión del botón 1 */
+bool isButton2Pressed = false;       /**< Estado de presión del botón 2 */
+bool isButton3Pressed = false;       /**< Estado de presión del botón 3 */
 
-bool isButtonFlagSet = true;
-bool wasButtonFlagSet = false;
+bool isButtonFlagSet = true;         /**< Bandera de estado de botón */
+bool wasButtonFlagSet = false;       /**< Estado previo de la bandera de botón */
 
-// Variables de comunicación y temporización
-bool isReceiveMsg = false;
-bool confirmationReceived = false;
-bool isOvertime = false;
-int commFailCount = 0;
+bool isReceiveMsg = false;           /**< Bandera de recepción de mensaje */
+bool confirmationReceived = false;   /**< Bandera de confirmación recibida */
+bool isOvertime = false;             /**< Bandera de sobretiempo */
+int commFailCount = 0;               /**< Contador de fallos de comunicación */
 
-enum States { MONITOR, PANIC, OFF };
+enum States { MONITOR, PANIC, OFF }; /**< Estados posibles del sistema */
 
-States currentState = OFF;
-States lastState = OFF;
+States currentState = OFF;           /**< Estado actual del sistema */
+States lastState = OFF;              /**< Último estado del sistema */
 
-// Variables de temporización
-auto startTime = 0;
-auto startTimeBlink = 0;
+auto startTime = 0;                  /**< Tiempo de inicio de temporización */
+auto startTimeBlink = 0;             /**< Tiempo de inicio para parpadeo de LEDs */
 
-// Prototipos de funciones
-void readButtons(void);
-void handleMonitorState(void);
-void handlePanicState(void);
-void handleOffState(void);
+//=====[Declarations (prototypes) of public functions]=========================
+void readButtons();
+/**<
+ * Lee el estado de los botones y actualiza las variables de estado.
+ * @param none
+ * @return none
+ */
+
+void handleMonitorState();
+/**<
+ * Maneja la lógica del estado MONITOR.
+ * @param none
+ * @return none
+ */
+
+void handlePanicState();
+/**<
+ * Maneja la lógica del estado PANIC.
+ * @param none
+ * @return none
+ */
+
+void handleOffState();
+/**<
+ * Maneja la lógica del estado OFF.
+ * @param none
+ * @return none
+ */
+
 void processButtonPress(DigitalIn &button, bool &isButtonPressed, States newState);
-bool processCommunication(char expectedMsg, char sendMsg);
-void resetStateVariables(void);
-void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2);
-void handleStates(void);
+/**<
+ * Procesa la pulsación de un botón.
+ * @param button Referencia al botón a procesar.
+ * @param isButtonPressed Referencia al estado de presión del botón.
+ * @param newState El nuevo estado que se establecerá si el botón es presionado.
+ * @return none
+ */
 
-int main() {
+bool processCommunication(char expectedMsg, char sendMsg);
+/**<
+ * Procesa la comunicación serie enviando y recibiendo mensajes.
+ * @param expectedMsg Mensaje esperado de respuesta.
+ * @param sendMsg Mensaje a enviar.
+ * @return true si la comunicación fue exitosa, false en caso contrario.
+ */
+
+void resetStateVariables();
+/**<
+ * Resetea las variables de estado del sistema.
+ * @param none
+ * @return none
+ */
+
+void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2);
+/**<
+ * Actualiza el estado de los LEDs.
+ * @param led1 Referencia al primer LED.
+ * @param led2 Referencia al segundo LED.
+ * @param normalState1 Estado normal del primer LED.
+ * @param normalState2 Estado normal del segundo LED.
+ * @return none
+ */
+
+void processStates();
+/**<
+ * Procesa el estado actual del sistema.
+ * @param none
+ * @return none
+ */
+
+//=====[Main function, the program entry point after power on or reset]========
+int main()
+/**<
+ * Llama a las funciones para inicializar los objetos de entrada y salida, e implementa el comportamiento del sistema.
+ * @param none
+ * @return none
+ */
+{
     // Configuración del serial
     serialComm.baud(9600);
     serialComm.format(8, SerialBase::None, 1);
 
     while (true) {
         readButtons();
-        handleStates();
+        processStates();
     }
 }
 
-void handleStates(void) {
+void processStates()
+{
     if (currentState != lastState) {
         resetStateVariables();
         isButtonFlagSet = true;
@@ -91,15 +154,15 @@ void handleStates(void) {
     }
 }
 
-// Lectura de los botones y actualización del estado
-void readButtons(void) {
+void readButtons()
+{
     processButtonPress(button1, isButton1Pressed, MONITOR);
     processButtonPress(button2, isButton2Pressed, PANIC);
     processButtonPress(button3, isButton3Pressed, OFF);
 }
 
-// Manejo de la pulsación de un botón
-void processButtonPress(DigitalIn &button, bool &isButtonPressed, States newState) {
+void processButtonPress(DigitalIn &button, bool &isButtonPressed, States newState)
+{
     if (!button && !isButtonPressed) {
         currentState = newState;
         isButtonFlagSet = !isButtonFlagSet;
@@ -109,8 +172,8 @@ void processButtonPress(DigitalIn &button, bool &isButtonPressed, States newStat
     }
 }
 
-// Estado de monitoreo
-void handleMonitorState(void) {
+void handleMonitorState()
+{
     if (!confirmationReceived) {
         confirmationReceived = processCommunication('M', 'm');
     } else {
@@ -119,8 +182,8 @@ void handleMonitorState(void) {
     updateLeds(led1, led2, true, false);
 }
 
-// Estado de pánico
-void handlePanicState(void) {
+void handlePanicState()
+{
     if (!confirmationReceived) {
         confirmationReceived = processCommunication('P', 'p');
     } else {
@@ -129,8 +192,8 @@ void handlePanicState(void) {
     updateLeds(led1, led2, false, true);
 }
 
-// Estado apagado
-void handleOffState(void) {
+void handleOffState()
+{
     if (!confirmationReceived) {
         confirmationReceived = processCommunication('O', 'o');
     } else {
@@ -139,8 +202,8 @@ void handleOffState(void) {
     updateLeds(led1, led2, false, false);
 }
 
-// Manejo de la comunicación serial
-bool processCommunication(char expectedMsg, char sendMsg) {
+bool processCommunication(char expectedMsg, char sendMsg)
+{
     char checkMsg = '\0';
 
     if (!isReceiveMsg) {
@@ -165,16 +228,16 @@ bool processCommunication(char expectedMsg, char sendMsg) {
     return false;
 }
 
-// Reseteo de variables de estado
-void resetStateVariables(void) {
+void resetStateVariables()
+{
     commFailCount = 0;
     isOvertime = false;
     confirmationReceived = false;
     isReceiveMsg = false;
 }
 
-// Parpadeo de LEDs en caso de error
-void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2) {
+void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2)
+{
     if ((commFailCount > MAX_FAILED) || isOvertime) {
         if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTimeBlink + TIMER_BLINK)) {
             led1 = !led1;
