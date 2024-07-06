@@ -125,7 +125,7 @@ int main()
     serialComm.baud(9600);
     serialComm.format(8, SerialBase::None, 1);
     serialComm.set_blocking(false);
-    //timer.start();
+    timer.start();
 
     while (true) {
         readButtons();
@@ -198,7 +198,7 @@ void handlePanicState()
     if (!confirmationReceived) {
         confirmationReceived = processCommunication('P', 'p');
     } else {
-        timer.stop();
+       // timer.stop();
     }
     updateLeds(led1, led2, false, true);
 }
@@ -216,14 +216,16 @@ void handleOffState()
         ledFlag = true;
     } else {
         if (ledFlag){
-            timer.start();
-            startTimeLed = elapsed_t_s(timer);
+            //timer.start();
+            //startTimeLed = elapsed_t_s(timer);
+            serialComm.write("x", 1);
+            timer.reset();
             ledFlag = false;
         }
-        if (elapsed_t_s(timer) > (startTimeLed + LED_ON_OFF_TIME)) {
+        if (elapsed_t_s(timer) > LED_ON_OFF_TIME) {
             normalOffState1 = false;
             normalOffState2 = false;
-            timer.stop();
+            //timer.stop();
         }else {
             normalOffState1 = true;
             normalOffState2 = true;
@@ -240,8 +242,9 @@ bool processCommunication(char expectedMsg, char sendMsg)
     if (!isReceiveMsg) {
         serialComm.write(&sendMsg, 1);
         isReceiveMsg = true;
-        timer.start();
+       // timer.start();
         startTime = elapsed_t_s(timer);
+       // timer.reset();
     } else if (serialComm.readable()) {
         serialComm.read(&checkMsg, 1);
         if (checkMsg == expectedMsg || checkMsg == 'P') {
@@ -270,10 +273,10 @@ void resetStateVariables()
 void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2)
 {
     if (isOvertime) {
-        if (elapsed_t_s(timer) > (startTimeBlink + BLINK_TIME)) {
-            led1 = !led1;
+        if (elapsed_t_s(timer) > BLINK_TIME) {
+            led1 = elapsed_t_s(timer) % 2;
             led2 = led1;
-            startTimeBlink = elapsed_t_s(timer);
+           // startTimeBlink = elapsed_t_s(timer);
         }
     } else {
         led1 = normalState1;
