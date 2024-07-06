@@ -1,143 +1,202 @@
-#include "mbed.h"
-#include "stdint.h"
+/**
+ * @file main.cpp
+ * @brief Programa que maneja el control de botones del usuario del sistema de alarma.
+ * @author BetsabeAilenRodriguez
+ */
 
+//=====[Librerías]===========
+#include "mbed.h"
+
+//=====[Definición de parámetros de Tiempo y función del tiempo]===========
+/**
+ * @def elapsed_t_s(x)
+ * @brief Macro para obtener el tiempo transcurrido en segundos desde el inicio de un timer.
+ * 
+ * Esta macro utiliza chrono::duration_cast para convertir el tiempo transcurrido
+ * desde el inicio del timer `x` en segundos.
+ * 
+ * @param x El objeto timer del cual se desea obtener el tiempo transcurrido.
+ * @return El tiempo transcurrido en segundos como un valor entero.
+ */
 #define elapsed_t_s(x)    chrono::duration_cast<chrono::seconds>((x).elapsed_time()).count()
 
-#define TIME_FOR_OVERTIME 5      ///< Tiempo en milisegundos para considerar sobretiempo en la comunicación
-#define BLINK_TIME 1             ///< Tiempo en milisegundos para el parpadeo de los LEDs en caso de error
-#define LED_ON_OFF_TIME 2        ///< Tiempo en milisegundos para indicar el estado OFF
+#define TIME_FOR_OVERTIME 5          ///< Tiempo en segundos para considerar sobretiempo en la comunicación
+#define BLINK_TIME 1                 ///< Tiempo en segundos para el parpadeo de los LEDs en caso de error
+#define LED_ON_OFF_TIME 2            ///< Tiempo en segundos para indicar el estado OFF
 
-//=====[Declaration and initialization of public global objects]===============
-DigitalIn button1(D4, PullUp);       /**< Botón 1 en el pin D4 */
-DigitalIn button2(D5, PullUp);       /**< Botón 2 en el pin D5 */
-DigitalIn button3(D3, PullUp);       /**< Botón 3 en el pin D3 */
+//=====[Declaración e inicialización de objetos globales públicos]=============
+DigitalIn button1(D4, PullUp);       ///< Botón 1 en el pin D4, correspondiente a la activación de MONITOR
+DigitalIn button2(D5, PullUp);       ///< Botón 2 en el pin D5, correspondiente a la activación de PANIC
+DigitalIn button3(D3, PullUp);       ///< Botón 3 en el pin D3, correspondiente a la activación de OFF
 
-DigitalOut led1(D14);                /**< LED 1 en el pin D14 */
-DigitalOut led2(D15);                /**< LED 2 en el pin D15 */
+DigitalOut led1(D14);                ///< LED 1 en el pin D14, correspondiente a la activación de MONITOR
+DigitalOut led2(D15);                ///< LED 2 en el pin D15, correspondiente a la activación de PANIC
 
-Timer timer;                         /**< Timer para la temporización general */
+Timer timer;                         ///< Timer para la temporización general
 
-static UnbufferedSerial serialComm(PB_10, PB_11); /**< Comunicación serie sin búfer en pines D1 (TX) y D0 (RX) */
+static UnbufferedSerial serialComm(PB_10, PB_11);  ///< Comunicación serie sin búfer en pines PB_10 (TX) y PB_11 (RX)
 
-//=====[Declaration and initialization of public global variables]=============
-bool isButton1Pressed = false;       /**< Estado de presión del botón 1 */
-bool isButton2Pressed = false;       /**< Estado de presión del botón 2 */
-bool isButton3Pressed = false;       /**< Estado de presión del botón 3 */
+//=====[Declaración e inicialización de variables globales públicas]===========
+bool isButtonFlagSet = true;          ///< Bandera de estado de botón para setear OFF
+bool wasButtonFlagSet = false;        ///< Estado previo de la bandera de botón
 
-bool isButtonFlagSet = true;         /**< Bandera de estado de botón */
-bool wasButtonFlagSet = false;       /**< Estado previo de la bandera de botón */
+bool isButton1Pressed = false;        ///< Estado de presión del botón 1 
+bool isButton2Pressed = false;        ///< Estado de presión del botón 2 
+bool isButton3Pressed = false;        ///< Estado de presión del botón 3 
 
-bool ledFlag = true;
+bool isReceiveMsg = false;            ///< Bandera de estado para la recepción del mensaje
+bool confirmationReceived = false;    ///< Bandera de confirmación de mensaje recibido 
+bool isOvertime = false;              ///< Bandera de sobretiempo
 
-bool isReceiveMsg = false;           /**< Bandera de recepción de mensaje */
-bool confirmationReceived = false;   /**< Bandera de confirmación recibida */
-bool isOvertime = false;             /**< Bandera de sobretiempo */
+/**
+ * @enum States
+ * @brief Enumera los posibles estados del sistema.
+ */
+enum States {
+    OFF,        ///< Estado apagado 
+    MONITOR,    ///< Estado de monitoreo 
+    PANIC       ///< Estado de pánico 
+};
 
-int isButtonFlagCount = 0;
+States currentState = OFF;            ///< Estado actual del sistema, inicialmente OFF
+States lastState = OFF;               ///< Último estado del sistema, inicialmente OFF
 
-enum States { MONITOR, PANIC, OFF }; /**< Estados posibles del sistema */
+auto startTime = 0;                   ///< Tiempo de inicio de temporización
 
-States currentState = OFF;           /**< Estado actual del sistema */
-States lastState = OFF;              /**< Último estado del sistema */
-
-auto startTime = 0;                  /**< Tiempo de inicio de temporización */
-auto startTimeBlink = 0;             /**< Tiempo de inicio para parpadeo de LEDs */
-auto startTimeLed = 0;
-//=====[Declarations (prototypes) of public functions]=========================
+//=====[Declaraciones (prototipos) de funciones públicas]=======================
+/**
+ * @brief Función para procesar los estados del sistema y manejar las transiciones entre ellos.
+ *
+ * Esta función lee los botones, gestiona las variables de estado y ejecuta las funciones
+ * correspondientes según el estado actual del sistema. También gestiona las transiciones
+ * entre estados y actualiza las variables de estado necesarias para cada estado.
+ *
+ * @param none
+ * @return void
+ */
+void processStates(void);
+/**
+ * @brief Lee el estado de los botones y procesa las acciones correspondientes.
+ * 
+ * Esta función llama a la función `processButtonPress` para cada botón específico,
+ * actualizando el estado de la aplicación según el botón presionado.
+ * 
+ * @see processButtonPress
+ * @param none
+ * @return void
+ */
 void readButtons();
-/**<
- * Lee el estado de los botones y actualiza las variables de estado.
- * @param none
- * @return none
- */
 
+/**
+ * @brief Maneja el estado MONITOR: envía 'm' y espera 'M'.
+ *
+ * Si no se ha recibido una confirmación previa, intenta procesar la comunicación esperando una respuesta específica.
+ * Actualiza los LEDs según el tiempo transcurrido.
+ *
+ * @param none
+ * @return void
+ */
 void handleMonitorState();
-/**<
- * Maneja la lógica del estado MONITOR.
- * @param none
- * @return none
- */
 
+/**
+ * @brief Maneja el estado PANIC: envía 'p' y espera 'P'.
+ *
+ * Si no se ha recibido una confirmación previa, intenta procesar la comunicación esperando una respuesta específica.
+ * Actualiza los LEDs según el tiempo transcurrido.
+ *
+ * @param none
+ * @return void
+ */
 void handlePanicState();
-/**<
- * Maneja la lógica del estado PANIC.
- * @param none
- * @return none
- */
 
+/**
+ * @brief Maneja el estado OFF: envía 'o' y espera 'O' en cuyo caso se solicite apagar un estado anterior.
+ * 
+ * Este estado, tiene dos funcionalidades, como OFF para apagar el estado anterior o como OFF para finalizar la comunicación.
+ * Si no se ha recibido una confirmación previa, intenta procesar la comunicación esperando una respuesta específica.
+ * Actualiza los estados normales y el estado del LED según el tiempo transcurrido.
+ *
+ * @param none
+ * @return void
+ */
 void handleOffState();
-/**<
- * Maneja la lógica del estado OFF.
- * @param none
- * @return none
- */
 
+/**
+ * @brief Procesa la pulsación de un botón y actualiza el estado del sistema según el botón presionado.
+ * 
+ * Si el botón está presionado y no se ha registrado como presionado previamente, actualiza el estado
+ * actual ("currentState") al nuevo estado especificado ("newState"), y marca el botón como presionado.
+ * 
+ * Si el botón se libera, marca el botón como no presionado.
+ * 
+ * @param button Referencia a un objeto `DigitalIn` que representa el botón a monitorear.
+ * @param isButtonPressed Referencia a una variable booleana que indica si el botón está presionado.
+ * @param newState Estado al que se transicionará si el botón es presionado.
+ * @return void
+ */
 void processButtonPress(DigitalIn &button, bool &isButtonPressed, States newState);
-/**<
- * Procesa la pulsación de un botón.
- * @param button Referencia al botón a procesar.
- * @param isButtonPressed Referencia al estado de presión del botón.
- * @param newState El nuevo estado que se establecerá si el botón es presionado.
- * @return none
- */
 
-bool processCommunication(char expectedMsg, char sendMsg);
-/**<
- * Procesa la comunicación serie enviando y recibiendo mensajes.
- * @param expectedMsg Mensaje esperado de respuesta.
+/**
+ * @brief Procesa la comunicación serie esperando un mensaje determinado y enviando un mensaje paricular.
+ *
+ * Esta función gestiona la comunicación serie enviando un mensaje y esperando una respuesta 
+ * específica dentro de un tiempo determinado. Si se recibe el mensaje esperado, actualiza el 
+ * estado del sistema según sea necesario. 
+ *
+ * @param expectedMsg Mensaje esperado.
  * @param sendMsg Mensaje a enviar.
- * @return true si la comunicación fue exitosa, false en caso contrario.
+ * @return true si se recibió el mensaje esperado, false si no.
  */
+bool processCommunication(char expectedMsg, char sendMsg);
 
+/**
+ * @brief Reinicia las variables de estado.
+ * @param none
+ * @return void
+ */
 void resetStateVariables();
-/**<
- * Resetea las variables de estado del sistema.
- * @param none
- * @return none
- */
 
+/**
+ * @brief Actualiza el estado de los LEDs según las condiciones actuales.
+ * 
+ * Si el sistema está en sobretiempo, los LEDs parpadean a intervalos definidos.
+ * De lo contrario, los LEDs se establecen en los estados normales proporcionados.
+ * 
+ * @param led1 Referencia a DigitalOut para el LED 1.
+ * @param led2 Referencia a DigitalOut para el LED 2.
+ * @param normalState1 Estado normal del LED 1.
+ * @param normalState2 Estado normal del LED 2.
+ */
 void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2);
-/**<
- * Actualiza el estado de los LEDs.
- * @param led1 Referencia al primer LED.
- * @param led2 Referencia al segundo LED.
- * @param normalState1 Estado normal del primer LED.
- * @param normalState2 Estado normal del segundo LED.
- * @return none
- */
 
-void processStates();
-/**<
- * Procesa el estado actual del sistema.
- * @param none
- * @return none
+//=====[Función principal, el punto de entrada del programa después de encender o resetear]========
+/**
+ * @brief Función principal del programa.
+ *
+ * Esta función inicializa los componentes necesarios, configura el puerto serial
+ * y el temporizador, y luego entra en un bucle infinito donde procesa los estados
+ * del sistema.
+ *
+ * @return int El valor de retorno representa el éxito de la aplicación.
  */
-
-//=====[Main function, the program entry point after power on or reset]========
 int main()
-/**<
- * Llama a las funciones para inicializar los objetos de entrada y salida, e implementa el comportamiento del sistema.
- * @param none
- * @return none
- */
 {
-    // Configuración del serial
-    serialComm.baud(9600);
-    serialComm.format(8, SerialBase::None, 1);
-    serialComm.set_blocking(false);
-    timer.start();
+    // Inicialización del puerto serial
+    serialComm.baud(9600);  // Configura la velocidad de baudios a 9600
+    serialComm.set_blocking(false);  // Configura la comunicación serial como no bloqueante
+
+    timer.start();  // Inicia el temporizador
 
     while (true) {
-        readButtons();
-        processStates();
+        processStates();  // Llamada a la función que maneja los estados del sistema
     }
 }
 
 void processStates()
 {
+    readButtons();
     if (currentState != lastState) {
         resetStateVariables();
-       // wasButtonFlagSet = isButtonFlagSet;
         lastState = currentState;
     }
 
@@ -197,17 +256,15 @@ void handlePanicState()
 {
     if (!confirmationReceived) {
         confirmationReceived = processCommunication('P', 'p');
-    } else {
-       // timer.stop();
     }
     updateLeds(led1, led2, false, true);
 }
 
 void handleOffState()
 {
-    bool normalOffState1;
-    bool normalOffState2;
-   // bool ledFlag;
+    static bool normalOffState1 = true;
+    static bool normalOffState2 = true;
+    static bool ledFlag = true;
 
     if (!confirmationReceived) {
         confirmationReceived = processCommunication('O', 'o');
@@ -216,8 +273,6 @@ void handleOffState()
         ledFlag = true;
     } else {
         if (ledFlag){
-            //timer.start();
-            //startTimeLed = elapsed_t_s(timer);
             serialComm.write("x", 1);
             timer.reset();
             ledFlag = false;
@@ -225,7 +280,6 @@ void handleOffState()
         if (elapsed_t_s(timer) > LED_ON_OFF_TIME) {
             normalOffState1 = false;
             normalOffState2 = false;
-            //timer.stop();
         }else {
             normalOffState1 = true;
             normalOffState2 = true;
@@ -242,9 +296,7 @@ bool processCommunication(char expectedMsg, char sendMsg)
     if (!isReceiveMsg) {
         serialComm.write(&sendMsg, 1);
         isReceiveMsg = true;
-       // timer.start();
         startTime = elapsed_t_s(timer);
-       // timer.reset();
     } else if (serialComm.readable()) {
         serialComm.read(&checkMsg, 1);
         if (checkMsg == expectedMsg || checkMsg == 'P') {
@@ -256,7 +308,7 @@ bool processCommunication(char expectedMsg, char sendMsg)
             isReceiveMsg = false;
             return true;
         }
-    }else if (elapsed_t_s(timer) > (startTime + TIME_FOR_OVERTIME)) {
+    } else if (elapsed_t_s(timer) > (startTime + TIME_FOR_OVERTIME)) {
         isOvertime = true;
         isReceiveMsg = false;
     }
@@ -276,7 +328,6 @@ void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool norm
         if (elapsed_t_s(timer) > BLINK_TIME) {
             led1 = elapsed_t_s(timer) % 2;
             led2 = led1;
-           // startTimeBlink = elapsed_t_s(timer);
         }
     } else {
         led1 = normalState1;
