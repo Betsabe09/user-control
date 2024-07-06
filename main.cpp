@@ -1,9 +1,11 @@
 #include "mbed.h"
 #include "stdint.h"
 
-#define MAX_FAILED 10                ///< Máximo número de fallos de comunicación antes de considerar error
-#define TIMER_FOR_OVERTIME 5000      ///< Tiempo en milisegundos para considerar sobretiempo en la comunicación
-#define TIMER_BLINK 1000             ///< Tiempo en milisegundos para el parpadeo de los LEDs en caso de error
+#define elapsed_t_s(x)    chrono::duration_cast<chrono::seconds>((x).elapsed_time()).count()
+
+#define TIME_FOR_OVERTIME 5      ///< Tiempo en milisegundos para considerar sobretiempo en la comunicación
+#define BLINK_TIME 1             ///< Tiempo en milisegundos para el parpadeo de los LEDs en caso de error
+#define LED_ON_OFF_TIME 2        ///< Tiempo en milisegundos para indicar el estado OFF
 
 //=====[Declaration and initialization of public global objects]===============
 DigitalIn button1(D4, PullUp);       /**< Botón 1 en el pin D4 */
@@ -15,7 +17,7 @@ DigitalOut led2(D15);                /**< LED 2 en el pin D15 */
 
 Timer timer;                         /**< Timer para la temporización general */
 
-static UnbufferedSerial serialComm(D1, D0); /**< Comunicación serie sin búfer en pines D1 (TX) y D0 (RX) */
+static UnbufferedSerial serialComm(PB_10, PB_11); /**< Comunicación serie sin búfer en pines D1 (TX) y D0 (RX) */
 
 //=====[Declaration and initialization of public global variables]=============
 bool isButton1Pressed = false;       /**< Estado de presión del botón 1 */
@@ -25,10 +27,13 @@ bool isButton3Pressed = false;       /**< Estado de presión del botón 3 */
 bool isButtonFlagSet = true;         /**< Bandera de estado de botón */
 bool wasButtonFlagSet = false;       /**< Estado previo de la bandera de botón */
 
+bool ledFlag = true;
+
 bool isReceiveMsg = false;           /**< Bandera de recepción de mensaje */
 bool confirmationReceived = false;   /**< Bandera de confirmación recibida */
 bool isOvertime = false;             /**< Bandera de sobretiempo */
-int commFailCount = 0;               /**< Contador de fallos de comunicación */
+
+int isButtonFlagCount = 0;
 
 enum States { MONITOR, PANIC, OFF }; /**< Estados posibles del sistema */
 
@@ -37,7 +42,7 @@ States lastState = OFF;              /**< Último estado del sistema */
 
 auto startTime = 0;                  /**< Tiempo de inicio de temporización */
 auto startTimeBlink = 0;             /**< Tiempo de inicio para parpadeo de LEDs */
-
+auto startTimeLed = 0;
 //=====[Declarations (prototypes) of public functions]=========================
 void readButtons();
 /**<
@@ -119,6 +124,8 @@ int main()
     // Configuración del serial
     serialComm.baud(9600);
     serialComm.format(8, SerialBase::None, 1);
+    serialComm.set_blocking(false);
+    //timer.start();
 
     while (true) {
         readButtons();
@@ -130,15 +137,19 @@ void processStates()
 {
     if (currentState != lastState) {
         resetStateVariables();
-        isButtonFlagSet = true;
+       // wasButtonFlagSet = isButtonFlagSet;
         lastState = currentState;
     }
 
     switch (currentState) {
         case MONITOR:
+            isButtonFlagSet = true;
+            wasButtonFlagSet = isButtonFlagSet;
             handleMonitorState();
             break;
         case PANIC:
+            isButtonFlagSet = true;
+            wasButtonFlagSet = isButtonFlagSet;
             handlePanicState();
             break;
         case OFF:
@@ -196,16 +207,29 @@ void handleOffState()
 {
     bool normalOffState1;
     bool normalOffState2;
+   // bool ledFlag;
 
     if (!confirmationReceived) {
         confirmationReceived = processCommunication('O', 'o');
         normalOffState1 = true;
         normalOffState2 = true;
+        ledFlag = true;
     } else {
-        timer.stop();
-        normalOffState1 = false;
-        normalOffState2 = false;
+        if (ledFlag){
+            timer.start();
+            startTimeLed = elapsed_t_s(timer);
+            ledFlag = false;
+        }
+        if (elapsed_t_s(timer) > (startTimeLed + LED_ON_OFF_TIME)) {
+            normalOffState1 = false;
+            normalOffState2 = false;
+            timer.stop();
+        }else {
+            normalOffState1 = true;
+            normalOffState2 = true;
+        }
     }
+
     updateLeds(led1, led2, normalOffState1, normalOffState2);
 }
 
@@ -217,18 +241,19 @@ bool processCommunication(char expectedMsg, char sendMsg)
         serialComm.write(&sendMsg, 1);
         isReceiveMsg = true;
         timer.start();
-        startTime = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+        startTime = elapsed_t_s(timer);
     } else if (serialComm.readable()) {
         serialComm.read(&checkMsg, 1);
-        if (checkMsg == expectedMsg) {
-            commFailCount = 0;
+        if (checkMsg == expectedMsg || checkMsg == 'P') {
+            if (currentState == MONITOR && checkMsg == 'P'){
+                lastState = currentState;
+                currentState = PANIC;
+            }
             isOvertime = false;
+            isReceiveMsg = false;
             return true;
-        } else {
-            commFailCount++;
         }
-        isReceiveMsg = false;
-    } else if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTime + TIMER_FOR_OVERTIME)) {
+    }else if (elapsed_t_s(timer) > (startTime + TIME_FOR_OVERTIME)) {
         isOvertime = true;
         isReceiveMsg = false;
     }
@@ -237,7 +262,6 @@ bool processCommunication(char expectedMsg, char sendMsg)
 
 void resetStateVariables()
 {
-    commFailCount = 0;
     isOvertime = false;
     confirmationReceived = false;
     isReceiveMsg = false;
@@ -245,11 +269,11 @@ void resetStateVariables()
 
 void updateLeds(DigitalOut &led1, DigitalOut &led2, bool normalState1, bool normalState2)
 {
-    if ((commFailCount > MAX_FAILED) || isOvertime) {
-        if (chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count() > (startTimeBlink + TIMER_BLINK)) {
+    if (isOvertime) {
+        if (elapsed_t_s(timer) > (startTimeBlink + BLINK_TIME)) {
             led1 = !led1;
             led2 = led1;
-            startTimeBlink = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+            startTimeBlink = elapsed_t_s(timer);
         }
     } else {
         led1 = normalState1;
